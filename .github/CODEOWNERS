@@ -1,0 +1,27 @@
+# Global owners
+* @0x1998s
+
+# Backend code
+/backend/ @0x1998s
+/backend/app/agents/ @0x1998s
+/backend/app/api/ @0x1998s
+/backend/app/core/ @0x1998s
+
+# Frontend code
+/frontend/ @0x1998s
+/frontend/src/components/ @0x1998s
+/frontend/src/pages/ @0x1998s
+
+# Documentation
+/docs/ @0x1998s
+*.md @0x1998s
+/README.md @0x1998s
+/CONTRIBUTING.md @0x1998s
+
+# Configuration files
+/docker-compose.yml @0x1998s
+/env.example @0x1998s
+/.github/ @0x1998s
+
+# Scripts
+/scripts/ @0x1998s

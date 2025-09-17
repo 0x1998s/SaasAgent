@@ -1,0 +1,216 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 主数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: saas_postgres
+    environment:
+      POSTGRES_DB: saasagent
+      POSTGRES_USER: saasagent
+      POSTGRES_PASSWORD: saasagent123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - saas_network
+    restart: unless-stopped
+
+  # Redis 缓存和会话存储
+  redis:
+    image: redis:7-alpine
+    container_name: saas_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - saas_network
+    restart: unless-stopped
+
+  # MongoDB 文档存储
+  mongodb:
+    image: mongo:7
+    container_name: saas_mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: saasagent
+      MONGO_INITDB_ROOT_PASSWORD: saasagent123
+      MONGO_INITDB_DATABASE: saasagent
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - saas_network
+    restart: unless-stopped
+
+  # ChromaDB 向量数据库
+  chromadb:
+    image: ghcr.io/chroma-core/chroma:latest
+    container_name: saas_chromadb
+    ports:
+      - "8001:8000"
+    volumes:
+      - chromadb_data:/chroma/chroma
+    networks:
+      - saas_network
+    restart: unless-stopped
+
+  # 后端API服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: saas_backend
+    environment:
+      - DATABASE_URL=postgresql://saasagent:saasagent123@postgres:5432/saasagent
+      - REDIS_URL=redis://redis:6379/0
+      - MONGODB_URL=mongodb://saasagent:saasagent123@mongodb:27017/saasagent
+      - CHROMADB_URL=http://chromadb:8000
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ENVIRONMENT=development
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+    depends_on:
+      - postgres
+      - redis
+      - mongodb
+      - chromadb
+    networks:
+      - saas_network
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # 前端Web应用
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: saas_frontend
+    environment:
+      - REACT_APP_API_BASE_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - saas_network
+    restart: unless-stopped
+
+  # Nginx 反向代理
+  nginx:
+    image: nginx:alpine
+    container_name: saas_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - saas_network
+    restart: unless-stopped
+
+  # Prometheus 监控
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: saas_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    networks:
+      - saas_network
+    restart: unless-stopped
+
+  # Grafana 可视化
+  grafana:
+    image: grafana/grafana:latest
+    container_name: saas_grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - saas_network
+    restart: unless-stopped
+
+  # Elasticsearch (日志存储)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: saas_elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - saas_network
+    restart: unless-stopped
+
+  # Kibana (日志可视化)
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: saas_kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - saas_network
+    restart: unless-stopped
+
+  # Logstash (日志处理)
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.0
+    container_name: saas_logstash
+    volumes:
+      - ./logging/logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+    depends_on:
+      - elasticsearch
+    networks:
+      - saas_network
+    restart: unless-stopped
+
+networks:
+  saas_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  mongodb_data:
+  chromadb_data:
+  prometheus_data:
+  grafana_data:
+  elasticsearch_data:

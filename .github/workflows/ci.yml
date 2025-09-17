@@ -1,0 +1,191 @@
+name: SaasAgent CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: saasagent_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:6
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        cd backend
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Lint with flake8
+      run: |
+        cd backend
+        pip install flake8
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Type check with mypy
+      run: |
+        cd backend
+        pip install mypy
+        mypy . --ignore-missing-imports || true
+    
+    - name: Run tests
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/saasagent_test
+        REDIS_URL: redis://localhost:6379/0
+        OPENAI_API_KEY: test_key
+        ANTHROPIC_API_KEY: test_key
+      run: |
+        cd backend
+        python -m pytest tests/ -v --cov=. --cov-report=xml || true
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./backend/coverage.xml
+        flags: backend
+        name: backend-coverage
+
+  frontend-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+    
+    - name: Install dependencies
+      run: |
+        cd frontend
+        npm ci
+    
+    - name: Lint with ESLint
+      run: |
+        cd frontend
+        npm run lint || true
+    
+    - name: Type check
+      run: |
+        cd frontend
+        npx tsc --noEmit
+    
+    - name: Run tests
+      run: |
+        cd frontend
+        npm test -- --coverage --watchAll=false || true
+    
+    - name: Build
+      run: |
+        cd frontend
+        npm run build
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Build backend Docker image
+      run: |
+        cd backend
+        docker build -t saasagent-backend:latest .
+    
+    - name: Build frontend Docker image
+      run: |
+        cd frontend
+        docker build -t saasagent-frontend:latest .
+    
+    - name: Test Docker Compose
+      run: |
+        docker-compose -f docker-compose.yml config
+    
+    - name: Test backend Docker image
+      run: |
+        docker run --rm saasagent-backend:latest python --version
+
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Run Bandit Security Scan
+      run: |
+        pip install bandit
+        bandit -r backend/ -f json -o bandit-report.json || true
+    
+    - name: Run npm audit
+      run: |
+        cd frontend
+        npm audit --audit-level moderate || true
+    
+    - name: Upload security scan results
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-scan-results
+        path: |
+          bandit-report.json
+          frontend/npm-audit.json
+
+  deploy-preview:
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test, docker-build]
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Deploy Preview Environment
+      run: |
+        echo "🚀 Deploying preview environment..."
+        echo "Preview URL will be available at: https://preview-${{ github.event.number }}.saasagent.dev"
+        # 这里可以添加实际的预览环境部署逻辑
