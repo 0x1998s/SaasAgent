@@ -22,7 +22,7 @@ transformers==4.36.2
 sqlalchemy==2.0.23
 alembic==1.13.1
 asyncpg==0.29.0
-redis==5.0.1
+redis==6.4.0
 motor==3.3.2
 pymongo==4.6.1
 
