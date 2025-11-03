@@ -34,7 +34,7 @@ requests==2.31.0
 # 任务队列
 celery==5.3.4
 flower==2.0.1
-kombu==5.3.4
+kombu==5.5.4
 
 # 数据处理
 pandas==2.1.4
